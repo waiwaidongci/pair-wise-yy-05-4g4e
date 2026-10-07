@@ -1,6 +1,7 @@
 import { createReducer, on } from '@ngrx/store';
 import {
   AggregateResult,
+  CellValue,
   FilterGroup,
   SavedView,
   TableRow,
@@ -53,7 +54,7 @@ export const initialState: TableState = {
   filter: EMPTY_FILTER,
   search: '',
   groupBy: null,
-  treeMode: false,
+  treeMode: true,
   expandedIds: [],
   selectedIds: [],
   visibleColumns: initialVisibleColumns,
@@ -71,13 +72,7 @@ export const tableReducer = createReducer(
   on(TableActions.loadPage, (state) => ({ ...state, loading: true, error: null })),
   on(TableActions.loadPageSuccess, (state, { result }) => ({
     ...state,
-    rows: result.rows.map((row) => {
-      const dirty = Object.entries(state.dirtyCells).reduce<TableRow>((current, [key, value]) => {
-        const [id, field] = key.split('::');
-        return current.id === id ? { ...current, [field]: value } : current;
-      }, row);
-      return dirty;
-    }),
+    rows: result.rows.map((row) => overlayDirtyCells(row, state.dirtyCells)),
     total: result.total,
     groups: result.groups,
     aggregates: result.aggregates,
@@ -121,11 +116,36 @@ export const tableReducer = createReducer(
     rows: state.rows.map((row) => (row.id === id ? { ...row, [key]: value } : row)),
     dirtyCells: { ...state.dirtyCells, [`${id}::${String(key)}`]: value },
   })),
+  on(TableActions.updateCellSuccess, (state, { result, committed }) => {
+    // 只清除本次已提交的脏单元格，其他运营/其他单元格的未提交变更保留
+    const dirtyCells = { ...state.dirtyCells };
+    committed.forEach((patch) => {
+      const dirtyKey = `${patch.id}::${String(patch.key)}`;
+      if (dirtyCells[dirtyKey] === patch.value) {
+        delete dirtyCells[dirtyKey];
+      }
+    });
+    const updatedById = new Map(result.updatedRows.map((row) => [row.id, row]));
+    const rows = state.rows
+      .filter((row) => !result.removedIds.includes(row.id))
+      .map((row) => overlayDirtyCells(updatedById.get(row.id) ?? row, dirtyCells));
+    return {
+      ...state,
+      rows,
+      dirtyCells,
+      total: result.total,
+      aggregates: result.aggregates,
+      groups: result.groups,
+      elapsedMs: result.elapsedMs,
+    };
+  }),
+  on(TableActions.updateCellFailure, (state, { error }) => ({ ...state, error })),
   on(TableActions.saveView, (state, { name }) => {
     const view: SavedView = {
       id: `view-${Date.now()}`,
       name: name.trim(),
       createdAt: new Date().toISOString(),
+      version: VIEW_VERSION,
       pageSize: state.pageSize,
       visibleColumns: [...state.visibleColumns],
       columnWidths: { ...state.columnWidths },
@@ -134,24 +154,29 @@ export const tableReducer = createReducer(
       filter: state.filter,
       groupBy: state.groupBy,
       treeMode: state.treeMode,
+      expandedIds: [...state.expandedIds],
     };
     const savedViews = [...state.savedViews.filter((item) => item.name !== view.name), view];
     persistViews(savedViews);
     return { ...state, savedViews, activeViewId: view.id };
   }),
-  on(TableActions.applyView, (state, { view }) => ({
-    ...state,
-    pageSize: view.pageSize,
-    visibleColumns: [...view.visibleColumns],
-    columnWidths: { ...view.columnWidths },
-    pinnedColumns: [...view.pinnedColumns],
-    sort: view.sort,
-    filter: view.filter,
-    groupBy: view.groupBy,
-    treeMode: view.treeMode,
-    activeViewId: view.id,
-    page: 0,
-  })),
+  on(TableActions.applyView, (state, { view }) => {
+    const migrated = migrateView(view);
+    return {
+      ...state,
+      pageSize: migrated.pageSize,
+      visibleColumns: [...migrated.visibleColumns],
+      columnWidths: { ...migrated.columnWidths },
+      pinnedColumns: [...migrated.pinnedColumns],
+      sort: migrated.sort,
+      filter: migrated.filter,
+      groupBy: migrated.groupBy,
+      treeMode: migrated.treeMode,
+      expandedIds: [...migrated.expandedIds],
+      activeViewId: migrated.id,
+      page: 0,
+    };
+  }),
   on(TableActions.deleteView, (state, { id }) => {
     const savedViews = state.savedViews.filter((view) => view.id !== id);
     persistViews(savedViews);
@@ -163,10 +188,33 @@ export const tableReducer = createReducer(
   }),
 );
 
+export const VIEW_VERSION = 2;
+
+// 旧视图缺少树形展开与汇总口径字段，打开时按新默认补齐；列宽与筛选保持原样
+function migrateView(view: SavedView): SavedView {
+  return {
+    ...view,
+    version: VIEW_VERSION,
+    treeMode: view.treeMode ?? true,
+    expandedIds: view.expandedIds ?? [],
+  };
+}
+
+function overlayDirtyCells(row: TableRow, dirtyCells: Record<string, CellValue>): TableRow {
+  let next = row;
+  Object.entries(dirtyCells).forEach(([key, value]) => {
+    const [id, field] = key.split('::');
+    if (id === row.id) {
+      next = { ...next, [field]: value };
+    }
+  });
+  return next;
+}
+
 function readViews(): SavedView[] {
   try {
     const raw = localStorage.getItem('pair-wise-yy-05:views');
-    return raw ? (JSON.parse(raw) as SavedView[]) : [];
+    return raw ? (JSON.parse(raw) as SavedView[]).map(migrateView) : [];
   } catch {
     return [];
   }

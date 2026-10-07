@@ -264,7 +264,7 @@ import { FilterGroup, SavedView, SortState, TableRow } from './types/table.model
               <span class="selection-note">已选择 {{ state.selectedIds.length }} 行</span>
             }
             <span class="spacer"></span>
-            <span class="muted">双击单元格可内联编辑</span>
+            <span class="muted">双击单元格可内联编辑，父单金额由子单自动汇总</span>
           </div>
           @if (state.loading) {
             <mat-progress-bar mode="indeterminate" />
@@ -735,7 +735,7 @@ export class AppComponent {
 
   updateCell(event: { id: string; key: keyof TableRow; value: string | number | boolean | null }): void {
     this.store.dispatch(TableActions.updateCell(event));
-    this.snackBar.open('单元格已更新，将进入待提交变更区', '关闭', { duration: 1600 });
+    this.snackBar.open('已提交模拟服务端，父单金额与汇总将同步重算', '关闭', { duration: 1600 });
   }
 
   toggleExpand(id: string): void {

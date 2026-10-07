@@ -113,9 +113,12 @@ export interface GridColumn {
                 class="cell"
                 [class.cell--pinned]="column.pinned"
                 [class.cell--number]="isNumeric(column.key)"
+                [class.cell--derived]="isDerivedAmount(row, column.key)"
                 [style.left.px]="column.pinned ? pinnedLeft(column.key) : null"
                 [style.width.px]="column.width"
                 [style.min-width.px]="column.width"
+                [matTooltip]="isDerivedAmount(row, column.key) ? '父单金额由子单汇总，不可直接编辑' : ''"
+                [matTooltipDisabled]="!isDerivedAmount(row, column.key)"
                 (click)="activate(rowIndex, columnIndex); $event.stopPropagation()"
                 (dblclick)="startEdit(row, column.key)"
               >
@@ -273,6 +276,11 @@ export interface GridColumn {
       justify-content: flex-end;
       font-variant-numeric: tabular-nums;
     }
+    .cell--derived {
+      background: #f8fafc;
+      color: #175cd3;
+      font-weight: 600;
+    }
     .sort-button {
       width: 100%;
       height: 100%;
@@ -403,6 +411,10 @@ export class DataGridComponent implements AfterViewInit {
     return ['amount', 'quantity', 'margin'].includes(String(key));
   }
 
+  isDerivedAmount(row: TableRow, key: keyof TableRow): boolean {
+    return key === 'amount' && row.childCount > 0;
+  }
+
   statusClass(status: TableRow['status']): string {
     return {
       待审核: 'status--warning',
@@ -465,6 +477,10 @@ export class DataGridComponent implements AfterViewInit {
 
   startEdit(row: TableRow, key: keyof TableRow): void {
     if (key === 'id') {
+      return;
+    }
+    // 父单合同金额由子单汇总得出，不允许直接编辑
+    if (this.isDerivedAmount(row, key)) {
       return;
     }
     this.editingId = row.id;

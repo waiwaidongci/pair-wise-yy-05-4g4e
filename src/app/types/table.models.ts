@@ -13,6 +13,7 @@ export interface TableRow {
   status: '待审核' | '进行中' | '已发货' | '已完成' | '异常';
   updatedAt: string;
   parentId: string | null;
+  childCount: number;
   [key: string]: CellValue;
 }
 
@@ -92,10 +93,31 @@ export interface QueryResult {
   elapsedMs: number;
 }
 
+export interface CellPatch {
+  id: string;
+  key: keyof TableRow;
+  value: CellValue;
+}
+
+export interface MutationRequest {
+  patches: CellPatch[];
+  context: QueryRequest;
+}
+
+export interface MutationResult {
+  updatedRows: TableRow[];
+  removedIds: string[];
+  total: number;
+  aggregates: AggregateResult;
+  groups: GroupSummary[];
+  elapsedMs: number;
+}
+
 export interface SavedView {
   id: string;
   name: string;
   createdAt: string;
+  version: number;
   pageSize: number;
   visibleColumns: Array<keyof TableRow>;
   columnWidths: Record<string, number>;
@@ -104,6 +126,7 @@ export interface SavedView {
   filter: FilterGroup;
   groupBy: keyof TableRow | null;
   treeMode: boolean;
+  expandedIds: string[];
 }
 
 export interface TableState {

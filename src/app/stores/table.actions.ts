@@ -1,7 +1,9 @@
 import { createAction, props } from '@ngrx/store';
 import {
+  CellPatch,
   CellValue,
   FilterGroup,
+  MutationResult,
   QueryResult,
   SavedView,
   SortState,
@@ -33,6 +35,14 @@ export const setDensity = createAction(
 export const updateCell = createAction(
   '[Order Table] Update Cell',
   props<{ id: string; key: keyof TableRow; value: CellValue }>(),
+);
+export const updateCellSuccess = createAction(
+  '[Order Table] Update Cell Success',
+  props<{ result: MutationResult; committed: CellPatch[] }>(),
+);
+export const updateCellFailure = createAction(
+  '[Order Table] Update Cell Failure',
+  props<{ error: string }>(),
 );
 export const saveView = createAction('[Order Table] Save View', props<{ name: string }>());
 export const applyView = createAction('[Order Table] Apply View', props<{ view: SavedView }>());
