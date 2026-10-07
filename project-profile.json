@@ -1,0 +1,11 @@
+{
+  "projectId": "pair-wise-yy-05",
+  "projectName": "企业订单数据中心",
+  "category": "数据表格",
+  "businessDomain": "研发工具",
+  "projectForm": "完整项目",
+  "codeScope": "frontend",
+  "languages": "Angular, TypeScript, Angular Material, NgRx, RxJS, Angular CDK",
+  "summary": "面向大数据量的企业级表格，支持列固定、分组聚合、树形展开、内联编辑、复杂筛选与视图保存。",
+  "containerized": false
+}

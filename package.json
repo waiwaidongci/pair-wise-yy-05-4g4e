@@ -1,0 +1,33 @@
+{
+  "name": "pair-wise-yy-05",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "bash scripts/ng-with-fixed-node.sh serve",
+    "dev": "bash scripts/ng-with-fixed-node.sh serve",
+    "build": "bash scripts/ng-with-fixed-node.sh build",
+    "preview": "bash scripts/ng-with-fixed-node.sh serve --configuration production"
+  },
+  "dependencies": {
+    "@angular/animations": "^20.3.0",
+    "@angular/cdk": "^20.2.0",
+    "@angular/common": "^20.3.0",
+    "@angular/compiler": "^20.3.0",
+    "@angular/core": "^20.3.0",
+    "@angular/forms": "^20.3.0",
+    "@angular/material": "^20.2.0",
+    "@angular/platform-browser": "^20.3.0",
+    "@ngrx/effects": "^20.0.0",
+    "@ngrx/store": "^20.0.0",
+    "material-icons": "^1.13.14",
+    "rxjs": "~7.8.2",
+    "tslib": "^2.8.1",
+    "zone.js": "~0.15.1"
+  },
+  "devDependencies": {
+    "@angular/build": "^20.3.0",
+    "@angular/cli": "^20.3.0",
+    "@angular/compiler-cli": "^20.3.0",
+    "typescript": "~5.9.2"
+  }
+}

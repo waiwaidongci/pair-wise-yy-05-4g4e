@@ -1,0 +1,82 @@
+@use '@angular/material' as mat;
+
+html {
+  color-scheme: light;
+  @include mat.theme((
+    color: (
+      primary: mat.$azure-palette,
+      tertiary: mat.$blue-palette,
+    ),
+    typography: 'Noto Sans SC',
+    density: 0,
+  ));
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #eef2f7;
+  color: #172033;
+  font-family: 'Noto Sans SC', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.muted {
+  color: #667085;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #175cd3;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.status--success {
+  color: #027a48;
+}
+
+.status--warning {
+  color: #b54708;
+}
+
+.status--danger {
+  color: #b42318;
+}
+
+.status--info {
+  color: #175cd3;
+}
