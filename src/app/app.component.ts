@@ -773,6 +773,7 @@ export class AppComponent {
     this.store.dispatch(TableActions.setSearch({ search: '' }));
     this.clearFilter();
     this.setGroup(null);
+    this.store.dispatch(TableActions.setTreeMode({ treeMode: true }));
   }
 
   exportCsv(): void {

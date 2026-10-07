@@ -53,7 +53,7 @@ export const initialState: TableState = {
   filter: EMPTY_FILTER,
   search: '',
   groupBy: null,
-  treeMode: false,
+  treeMode: true,
   expandedIds: [],
   selectedIds: [],
   visibleColumns: initialVisibleColumns,
@@ -92,6 +92,7 @@ export const tableReducer = createReducer(
   on(TableActions.setSearch, (state, { search }) => ({ ...state, search, page: 0 })),
   on(TableActions.setGroupBy, (state, { groupBy }) => ({ ...state, groupBy, page: 0 })),
   on(TableActions.toggleTreeMode, (state) => ({ ...state, treeMode: !state.treeMode, page: 0 })),
+  on(TableActions.setTreeMode, (state, { treeMode }) => ({ ...state, treeMode, page: 0 })),
   on(TableActions.toggleExpanded, (state, { id }) => ({
     ...state,
     expandedIds: state.expandedIds.includes(id)
@@ -116,11 +117,18 @@ export const tableReducer = createReducer(
       : [...state.pinnedColumns, key],
   })),
   on(TableActions.setDensity, (state, { density }) => ({ ...state, density })),
-  on(TableActions.updateCell, (state, { id, key, value }) => ({
-    ...state,
-    rows: state.rows.map((row) => (row.id === id ? { ...row, [key]: value } : row)),
-    dirtyCells: { ...state.dirtyCells, [`${id}::${String(key)}`]: value },
-  })),
+  on(TableActions.updateCell, (state, { id, key, value }) => {
+    // 父单合同金额由子单汇总得到，不允许直接填写。
+    const target = state.rows.find((row) => row.id === id);
+    if (target && target.parentId === null && key === 'amount') {
+      return state;
+    }
+    return {
+      ...state,
+      rows: state.rows.map((row) => (row.id === id ? { ...row, [key]: value } : row)),
+      dirtyCells: { ...state.dirtyCells, [`${id}::${String(key)}`]: value },
+    };
+  }),
   on(TableActions.saveView, (state, { name }) => {
     const view: SavedView = {
       id: `view-${Date.now()}`,
@@ -148,7 +156,8 @@ export const tableReducer = createReducer(
     sort: view.sort,
     filter: view.filter,
     groupBy: view.groupBy,
-    treeMode: view.treeMode,
+    // 旧视图缺少树形展开与汇总口径，打开时按新默认升级；列宽与筛选照旧。
+    treeMode: view.treeMode ?? true,
     activeViewId: view.id,
     page: 0,
   })),

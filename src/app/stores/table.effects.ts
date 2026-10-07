@@ -1,6 +1,6 @@
 import { inject, Injectable } from '@angular/core';
 import { Actions, createEffect, ofType } from '@ngrx/effects';
-import { catchError, map, of, switchMap, withLatestFrom } from 'rxjs';
+import { catchError, map, mergeMap, of, switchMap, withLatestFrom } from 'rxjs';
 import { Store } from '@ngrx/store';
 import { MockTableApiService } from '../data/mock-table-api.service';
 import * as TableActions from './table.actions';
@@ -23,6 +23,7 @@ export class TableEffects {
         TableActions.setSearch,
         TableActions.setGroupBy,
         TableActions.toggleTreeMode,
+        TableActions.setTreeMode,
         TableActions.toggleExpanded,
       ),
       withLatestFrom(this.store.select(selectTableState)),
@@ -45,6 +46,20 @@ export class TableEffects {
             ),
           ),
       ),
+    ),
+  );
+
+  /**
+   * 单元格编辑先落库到模拟服务端（按受影响范围重算父单与分组），
+   * 再触发分页查询刷新汇总；不同子单的编辑各自落库，互不覆盖。
+   */
+  applyEdit$ = createEffect(() =>
+    this.actions$.pipe(
+      ofType(TableActions.updateCell),
+      mergeMap(({ id, key, value }) => {
+        this.api.applyEdit(id, key, value);
+        return of(TableActions.loadPage({ refresh: true }));
+      }),
     ),
   );
 }

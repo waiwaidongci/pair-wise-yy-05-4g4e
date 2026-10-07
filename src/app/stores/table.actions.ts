@@ -18,6 +18,7 @@ export const setFilter = createAction('[Order Table] Set Filter', props<{ filter
 export const setSearch = createAction('[Order Table] Set Search', props<{ search: string }>());
 export const setGroupBy = createAction('[Order Table] Set Group By', props<{ groupBy: keyof TableRow | null }>());
 export const toggleTreeMode = createAction('[Order Table] Toggle Tree Mode');
+export const setTreeMode = createAction('[Order Table] Set Tree Mode', props<{ treeMode: boolean }>());
 export const toggleExpanded = createAction('[Order Table] Toggle Expanded', props<{ id: string }>());
 export const setSelection = createAction('[Order Table] Set Selection', props<{ ids: string[] }>());
 export const toggleColumn = createAction('[Order Table] Toggle Column', props<{ key: keyof TableRow }>());

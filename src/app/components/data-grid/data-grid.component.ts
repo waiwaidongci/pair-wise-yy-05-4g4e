@@ -113,6 +113,7 @@ export interface GridColumn {
                 class="cell"
                 [class.cell--pinned]="column.pinned"
                 [class.cell--number]="isNumeric(column.key)"
+                [class.cell--readonly]="column.key === 'amount' && !row.parentId"
                 [style.left.px]="column.pinned ? pinnedLeft(column.key) : null"
                 [style.width.px]="column.width"
                 [style.min-width.px]="column.width"
@@ -272,6 +273,11 @@ export interface GridColumn {
     .cell--number {
       justify-content: flex-end;
       font-variant-numeric: tabular-nums;
+    }
+    .cell--readonly {
+      color: #667085;
+      background: #f7f9fc;
+      cursor: not-allowed;
     }
     .sort-button {
       width: 100%;
@@ -465,6 +471,10 @@ export class DataGridComponent implements AfterViewInit {
 
   startEdit(row: TableRow, key: keyof TableRow): void {
     if (key === 'id') {
+      return;
+    }
+    // 父单合同金额由子单汇总得到，不允许直接填写。
+    if (key === 'amount' && !row.parentId) {
       return;
     }
     this.editingId = row.id;

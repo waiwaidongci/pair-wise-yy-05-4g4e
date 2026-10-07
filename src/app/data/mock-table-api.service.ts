@@ -18,20 +18,61 @@ const CATEGORIES = ['云服务', '智能硬件', '企业软件', '数据服务',
 const OWNERS = ['陈嘉', '林月', '周砺', '许宁', '韩舟', '顾清', '沈河', '陆遥'];
 const STATUSES: TableRow['status'][] = ['待审核', '进行中', '已发货', '已完成', '异常'];
 
+/** 单批处理的行数：数据量达到 5 万行时按批重算，避免整表扫描。 */
+const BATCH_SIZE = 5000;
+
+interface GroupBucket {
+  count: number;
+  amount: number;
+  quantity: number;
+  marginSum: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class MockTableApiService {
   private readonly rows: TableRow[] = this.createRows(50000);
+  private readonly rowById = new Map<string, TableRow>();
+  private readonly childrenByParent = new Map<string, TableRow[]>();
+  private readonly leafIds = new Set<string>();
+
+  /** 增量维护的汇总与分组，编辑子单时按受影响范围更新，不整表扫描。 */
+  private totalAmount = 0;
+  private totalQuantity = 0;
+  private totalMarginSum = 0;
+  private leafCount = 0;
+  private currentGroupBy: keyof TableRow | null = null;
+  private groupsMap = new Map<string, GroupBucket>();
+  private lastFilterKey = '';
+  private lastFilter: FilterGroup = { kind: 'group', id: 'root', logic: 'and', children: [] };
+  private lastSearch = '';
+
+  constructor() {
+    this.buildIndexes();
+    this.recomputeAllParentAmounts();
+    this.recomputeTotals(this.rows);
+  }
 
   query(request: QueryRequest): Observable<QueryResult> {
     const startedAt = performance.now();
     const filtered = this.filterRows(this.rows, request.filter, request.search);
     const sorted = this.sortRows(filtered, request.sort);
-    const groups = request.groupBy ? this.groupRows(sorted, request.groupBy) : [];
+
+    // 筛选、搜索或分组口径变化时才重建分组与汇总；编辑子单时走增量维护。
+    const filterKey = this.filterSignature(request);
+    if (filterKey !== this.lastFilterKey || request.groupBy !== this.currentGroupBy) {
+      this.recomputeGroups(filtered, request.groupBy);
+      this.recomputeTotals(filtered);
+      this.lastFilterKey = filterKey;
+    }
+    this.lastFilter = request.filter;
+    this.lastSearch = request.search;
+    const groups = this.buildGroupSummaries();
 
     let pageRows: TableRow[];
     let total: number;
 
     if (request.treeMode) {
+      // 树形模式只按父单分页；展开的父单取回其全部子单（无论落在哪一页）。
       const roots = sorted.filter((row) => row.parentId === null);
       total = roots.length;
       const rootPage = roots.slice(
@@ -56,14 +97,290 @@ export class MockTableApiService {
     return of({
       rows: pageRows,
       total,
-      aggregates: this.aggregate(sorted),
+      aggregates: this.currentAggregates(),
       groups,
       elapsedMs,
     }).pipe(delay(request.page > 8 ? 120 : 55));
   }
 
+  /**
+   * 应用一次单元格编辑。只更新受影响的子单及其父单、分组与汇总，
+   * 不整表重算；不同子单的编辑各自落库，互不覆盖。
+   */
+  applyEdit(id: string, field: keyof TableRow, value: CellValue): void {
+    const row = this.rowById.get(id);
+    if (!row) {
+      return;
+    }
+    const oldValue = row[field];
+    if (oldValue === value) {
+      return;
+    }
+
+    const wasMatching = this.matchesCurrentFilter(row);
+    row[field] = value;
+    const isMatching = this.matchesCurrentFilter(row);
+
+    if (field === 'amount' && row.parentId) {
+      this.recomputeParentAmount(row.parentId);
+    }
+
+    if (wasMatching && isMatching) {
+      this.updateTotalsForEdit(row, field, oldValue, value);
+      this.updateGroupsForEdit(row, field, oldValue, value);
+    } else if (wasMatching && !isMatching) {
+      this.removeFromTotals(row);
+      this.removeFromGroups(row);
+    } else if (!wasMatching && isMatching) {
+      this.addToTotals(row);
+      this.addToGroups(row);
+    }
+  }
+
   getDatasetSize(): number {
     return this.rows.length;
+  }
+
+  /** 父单合同金额由其全部子单汇总得到，父单自身不直接填写。 */
+  private recomputeParentAmount(parentId: string): void {
+    const parent = this.rowById.get(parentId);
+    const children = this.childrenByParent.get(parentId);
+    if (!parent || !children) {
+      return;
+    }
+    let amount = 0;
+    for (let index = 0; index < children.length; index += BATCH_SIZE) {
+      const batch = children.slice(index, index + BATCH_SIZE);
+      for (const child of batch) {
+        amount += child.amount;
+      }
+    }
+    parent.amount = Math.round(amount * 100) / 100;
+  }
+
+  private recomputeAllParentAmounts(): void {
+    const parentIds = [...this.childrenByParent.keys()];
+    for (let index = 0; index < parentIds.length; index += BATCH_SIZE) {
+      const batch = parentIds.slice(index, index + BATCH_SIZE);
+      for (const parentId of batch) {
+        this.recomputeParentAmount(parentId);
+      }
+    }
+  }
+
+  private buildIndexes(): void {
+    for (const row of this.rows) {
+      this.rowById.set(row.id, row);
+      if (row.parentId) {
+        const siblings = this.childrenByParent.get(row.parentId) ?? [];
+        siblings.push(row);
+        this.childrenByParent.set(row.parentId, siblings);
+      }
+    }
+    for (const row of this.rows) {
+      if (!this.childrenByParent.has(row.id)) {
+        this.leafIds.add(row.id);
+      }
+    }
+  }
+
+  private isLeaf(row: TableRow): boolean {
+    return this.leafIds.has(row.id);
+  }
+
+  private matchesCurrentFilter(row: TableRow): boolean {
+    if (!this.evaluateNode(row, this.lastFilter)) {
+      return false;
+    }
+    const normalizedSearch = this.lastSearch.trim().toLowerCase();
+    if (!normalizedSearch) {
+      return true;
+    }
+    return [row.orderNo, row.customer, row.region, row.category, row.owner, row.status]
+      .some((value) => String(value).toLowerCase().includes(normalizedSearch));
+  }
+
+  private addToTotals(row: TableRow): void {
+    if (!this.isLeaf(row)) {
+      return;
+    }
+    this.totalAmount += row.amount;
+    this.totalQuantity += row.quantity;
+    this.totalMarginSum += row.margin;
+    this.leafCount += 1;
+  }
+
+  private removeFromTotals(row: TableRow): void {
+    if (!this.isLeaf(row)) {
+      return;
+    }
+    this.totalAmount -= row.amount;
+    this.totalQuantity -= row.quantity;
+    this.totalMarginSum -= row.margin;
+    this.leafCount -= 1;
+  }
+
+  private addToGroups(row: TableRow): void {
+    if (!this.currentGroupBy || !this.isLeaf(row)) {
+      return;
+    }
+    this.addToGroup(String(row[this.currentGroupBy] ?? '未分类'), row);
+  }
+
+  private removeFromGroups(row: TableRow): void {
+    if (!this.currentGroupBy || !this.isLeaf(row)) {
+      return;
+    }
+    this.removeFromGroup(String(row[this.currentGroupBy] ?? '未分类'), row);
+  }
+
+  private recomputeTotals(rows: TableRow[]): void {
+    this.totalAmount = 0;
+    this.totalQuantity = 0;
+    this.totalMarginSum = 0;
+    this.leafCount = 0;
+    for (let index = 0; index < rows.length; index += BATCH_SIZE) {
+      const batch = rows.slice(index, index + BATCH_SIZE);
+      for (const row of batch) {
+        if (!this.isLeaf(row)) {
+          continue;
+        }
+        this.totalAmount += row.amount;
+        this.totalQuantity += row.quantity;
+        this.totalMarginSum += row.margin;
+        this.leafCount += 1;
+      }
+    }
+  }
+
+  private updateTotalsForEdit(
+    row: TableRow,
+    field: keyof TableRow,
+    oldValue: CellValue,
+    newValue: CellValue,
+  ): void {
+    if (!this.isLeaf(row)) {
+      return;
+    }
+    if (field === 'amount') {
+      this.totalAmount += Number(newValue) - Number(oldValue);
+    } else if (field === 'quantity') {
+      this.totalQuantity += Number(newValue) - Number(oldValue);
+    } else if (field === 'margin') {
+      this.totalMarginSum += Number(newValue) - Number(oldValue);
+    }
+  }
+
+  private recomputeGroups(rows: TableRow[], groupBy: keyof TableRow | null): void {
+    this.groupsMap.clear();
+    this.currentGroupBy = groupBy;
+    if (!groupBy) {
+      return;
+    }
+    for (let index = 0; index < rows.length; index += BATCH_SIZE) {
+      const batch = rows.slice(index, index + BATCH_SIZE);
+      for (const row of batch) {
+        if (!this.isLeaf(row)) {
+          continue;
+        }
+        const key = String(row[groupBy] ?? '未分类');
+        const bucket = this.groupsMap.get(key) ?? { count: 0, amount: 0, quantity: 0, marginSum: 0 };
+        bucket.count += 1;
+        bucket.amount += row.amount;
+        bucket.quantity += row.quantity;
+        bucket.marginSum += row.margin;
+        this.groupsMap.set(key, bucket);
+      }
+    }
+  }
+
+  private updateGroupsForEdit(
+    row: TableRow,
+    field: keyof TableRow,
+    oldValue: CellValue,
+    newValue: CellValue,
+  ): void {
+    if (!this.currentGroupBy || !this.isLeaf(row)) {
+      return;
+    }
+    const groupBy = this.currentGroupBy;
+    if (field === groupBy) {
+      const oldKey = String(oldValue ?? '未分类');
+      const newKey = String(newValue ?? '未分类');
+      if (oldKey !== newKey) {
+        this.removeFromGroup(oldKey, row);
+        this.addToGroup(newKey, row);
+        return;
+      }
+    }
+    const key = String(row[groupBy] ?? '未分类');
+    const bucket = this.groupsMap.get(key);
+    if (!bucket) {
+      return;
+    }
+    if (field === 'amount') {
+      bucket.amount += Number(newValue) - Number(oldValue);
+    } else if (field === 'quantity') {
+      bucket.quantity += Number(newValue) - Number(oldValue);
+    } else if (field === 'margin') {
+      bucket.marginSum += Number(newValue) - Number(oldValue);
+    }
+  }
+
+  private addToGroup(key: string, row: TableRow): void {
+    const bucket = this.groupsMap.get(key) ?? { count: 0, amount: 0, quantity: 0, marginSum: 0 };
+    bucket.count += 1;
+    bucket.amount += row.amount;
+    bucket.quantity += row.quantity;
+    bucket.marginSum += row.margin;
+    this.groupsMap.set(key, bucket);
+  }
+
+  private removeFromGroup(key: string, row: TableRow): void {
+    const bucket = this.groupsMap.get(key);
+    if (!bucket) {
+      return;
+    }
+    bucket.count -= 1;
+    bucket.amount -= row.amount;
+    bucket.quantity -= row.quantity;
+    bucket.marginSum -= row.margin;
+    if (bucket.count <= 0) {
+      this.groupsMap.delete(key);
+    }
+  }
+
+  private buildGroupSummaries(): GroupSummary[] {
+    if (!this.currentGroupBy) {
+      return [];
+    }
+    return [...this.groupsMap.entries()]
+      .map(([key, bucket]) => ({
+        key,
+        count: bucket.count,
+        aggregate: {
+          amount: Math.round(bucket.amount * 100) / 100,
+          quantity: bucket.quantity,
+          averageMargin: bucket.count
+            ? Math.round((bucket.marginSum / bucket.count) * 10) / 10
+            : 0,
+        },
+      }))
+      .sort((left, right) => right.aggregate.amount - left.aggregate.amount);
+  }
+
+  private currentAggregates(): AggregateResult {
+    return {
+      amount: Math.round(this.totalAmount * 100) / 100,
+      quantity: this.totalQuantity,
+      averageMargin: this.leafCount
+        ? Math.round((this.totalMarginSum / this.leafCount) * 10) / 10
+        : 0,
+    };
+  }
+
+  private filterSignature(request: QueryRequest): string {
+    return JSON.stringify({ filter: request.filter, search: request.search });
   }
 
   private filterRows(rows: TableRow[], filter: FilterGroup, search: string): TableRow[] {
@@ -136,37 +453,6 @@ export class MockTableApiService {
       }
       return String(a).localeCompare(String(b), 'zh-CN') * direction;
     });
-  }
-
-  private groupRows(rows: TableRow[], groupBy: keyof TableRow): GroupSummary[] {
-    const buckets = new Map<string, TableRow[]>();
-    rows.forEach((row) => {
-      const key = String(row[groupBy] ?? '未分类');
-      const bucket = buckets.get(key) ?? [];
-      bucket.push(row);
-      buckets.set(key, bucket);
-    });
-    return [...buckets.entries()]
-      .map(([key, bucket]) => ({
-        key,
-        count: bucket.length,
-        aggregate: this.aggregate(bucket),
-      }))
-      .sort((left, right) => right.aggregate.amount - left.aggregate.amount);
-  }
-
-  private aggregate(rows: TableRow[]): AggregateResult {
-    if (!rows.length) {
-      return { amount: 0, quantity: 0, averageMargin: 0 };
-    }
-    const amount = rows.reduce((sum, row) => sum + row.amount, 0);
-    const quantity = rows.reduce((sum, row) => sum + row.quantity, 0);
-    const averageMargin = rows.reduce((sum, row) => sum + row.margin, 0) / rows.length;
-    return {
-      amount: Math.round(amount * 100) / 100,
-      quantity,
-      averageMargin: Math.round(averageMargin * 10) / 10,
-    };
   }
 
   private createRows(count: number): TableRow[] {
